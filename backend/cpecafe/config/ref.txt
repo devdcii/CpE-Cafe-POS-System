@@ -1,0 +1,4880 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+class MainScreen extends StatefulWidget {
+  @override
+  _MainScreenState createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 0;
+
+  List<Widget> _screens = [
+    OrderingScreen(),
+    InventoryScreen(),
+    SalesReportScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('CPE Cafe'),
+        centerTitle: true,
+        backgroundColor: Color(0xFF8B4513), // Changed to khaki brown
+        foregroundColor: Colors.white, // Changed to white text
+        elevation: 2,
+        automaticallyImplyLeading: false, // Remove back button
+      ),
+      body: _screens[_selectedIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) {
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
+        backgroundColor: Colors.white,
+        selectedItemColor: Color(0xFF8B4513), // Changed to khaki brown
+        unselectedItemColor: Colors.grey,
+        items: [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.shopping_cart),
+            label: 'Order',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.inventory),
+            label: 'Inventory',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.analytics),
+            label: 'Reports',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class Product {
+  final int id;
+  final String name;
+  final String category;
+  final double largePrice;
+  final double smallPrice;
+  final int stock;
+  final String image;
+
+  Product({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.largePrice,
+    required this.smallPrice,
+    required this.stock,
+    required this.image,
+  });
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    return Product(
+      id: int.parse(json['id'].toString()),
+      name: json['name'],
+      category: json['category'],
+      largePrice: double.parse(json['large_price'].toString()),
+      smallPrice: double.parse(json['small_price'].toString()),
+      stock: int.parse(json['stock'].toString()),
+      image: json['image'] ?? 'assets/images/bgcafe.jfif',
+    );
+  }
+}
+
+class OrderItem {
+  final Product product;
+  final String size;
+  int quantity;
+
+  OrderItem({
+    required this.product,
+    required this.size,
+    required this.quantity,
+  });
+
+  double get totalPrice {
+    double unitPrice = size == 'Large' ? product.largePrice : product.smallPrice;
+    return unitPrice * quantity;
+  }
+}
+
+class OrderingScreen extends StatefulWidget {
+  @override
+  _OrderingScreenState createState() => _OrderingScreenState();
+}
+
+class _OrderingScreenState extends State<OrderingScreen> {
+  List<Product> products = [];
+  Map<String, List<Product>> categorizedProducts = {};
+  List<OrderItem> cart = [];
+  bool isLoading = true;
+  String selectedCategory = 'All';
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_products.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            products = (data['products'] as List)
+                .map((item) => Product.fromJson(item))
+                .toList();
+            categorizeProducts();
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+      _showErrorDialog('Failed to load products: $e');
+    }
+  }
+
+  void categorizeProducts() {
+    categorizedProducts = {'All': products};
+    for (var product in products) {
+      if (!categorizedProducts.containsKey(product.category)) {
+        categorizedProducts[product.category] = [];
+      }
+      categorizedProducts[product.category]!.add(product);
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Error', style: TextStyle(color: Color(0xFF8B4513))),
+        content: Text(message),
+        backgroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: TextStyle(color: Color(0xFF8B4513))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _processOrder() async {
+    if (cart.isEmpty) {
+      _showErrorDialog('Cart is empty!');
+      return;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost/cpecafe/process_order.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'items': cart.map((item) => {
+            'product_id': item.product.id,
+            'quantity': item.quantity,
+            'size': item.size,
+            'price': item.size == 'Large' ? item.product.largePrice : item.product.smallPrice,
+          }).toList(),
+          'total': cart.fold(0.0, (sum, item) => sum + item.totalPrice),
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            cart.clear();
+          });
+          _showSuccessDialog('Order processed successfully!');
+          loadProducts(); // Refresh products to update stock
+        } else {
+          _showErrorDialog(data['message'] ?? 'Failed to process order');
+        }
+      }
+    } catch (e) {
+      _showErrorDialog('Failed to process order: $e');
+    }
+  }
+
+  void _showSuccessDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Success', style: TextStyle(color: Color(0xFF8B4513))),
+        content: Text(message),
+        backgroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: TextStyle(color: Color(0xFF8B4513))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+        ),
+      );
+    }
+
+    List<Product> displayProducts = selectedCategory == 'All'
+        ? products
+        : categorizedProducts[selectedCategory] ?? [];
+
+    return Column(
+      children: [
+        // Category Filter
+        Container(
+          height: 50,
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            children: categorizedProducts.keys.map((category) {
+              return Padding(
+                padding: EdgeInsets.symmetric(horizontal: 4),
+                child: FilterChip(
+                  label: Text(category),
+                  selected: selectedCategory == category,
+                  onSelected: (selected) {
+                    setState(() {
+                      selectedCategory = category;
+                    });
+                  },
+                  backgroundColor: Colors.white,
+                  selectedColor: Color(0xFF8B4513), // Changed to khaki brown
+                  checkmarkColor: Colors.white,
+                  labelStyle: TextStyle(
+                    color: selectedCategory == category ? Colors.white : Color(0xFF8B4513),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        // Products Grid
+        Expanded(
+          flex: 3,
+          child: GridView.builder(
+            padding: EdgeInsets.all(8),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.75,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemCount: displayProducts.length,
+            itemBuilder: (context, index) {
+              final product = displayProducts[index];
+              return ProductCard(
+                product: product,
+                onAddToCart: (orderItem) {
+                  if (product.stock <= 0) {
+                    _showErrorDialog('${product.name} is out of stock!');
+                    return;
+                  }
+
+                  setState(() {
+                    int existingIndex = cart.indexWhere((item) =>
+                    item.product.id == orderItem.product.id &&
+                        item.size == orderItem.size);
+
+                    if (existingIndex != -1) {
+                      cart[existingIndex].quantity += orderItem.quantity;
+                    } else {
+                      cart.add(orderItem);
+                    }
+                  });
+                },
+              );
+            },
+          ),
+        ),
+        // Cart Section
+        Container(
+          height: 200,
+          decoration: BoxDecoration(
+            color: Color(0xFF8B4513).withOpacity(0.1), // Changed to match theme
+            border: Border(top: BorderSide(color: Color(0xFF8B4513).withOpacity(0.3))),
+          ),
+          child: Column(
+            children: [
+              Padding(
+                padding: EdgeInsets.all(8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Cart (${cart.length} items)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Color(0xFF8B4513),
+                        )),
+                    Text('Total: ₱${cart.fold(0.0, (sum, item) => sum + item.totalPrice).toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Color(0xFF8B4513),
+                        )),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: cart.isEmpty
+                    ? Center(
+                    child: Text(
+                      'Cart is empty',
+                      style: TextStyle(color: Color(0xFF8B4513).withOpacity(0.7)),
+                    ))
+                    : ListView.builder(
+                  itemCount: cart.length,
+                  itemBuilder: (context, index) {
+                    final item = cart[index];
+                    return ListTile(
+                      title: Text(
+                        '${item.product.name} (${item.size})',
+                        style: TextStyle(color: Color(0xFF8B4513)),
+                      ),
+                      subtitle: Text(
+                        '₱${(item.size == 'Large' ? item.product.largePrice : item.product.smallPrice).toStringAsFixed(2)} x ${item.quantity}',
+                        style: TextStyle(color: Color(0xFF8B4513).withOpacity(0.7)),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '₱${item.totalPrice.toStringAsFixed(2)}',
+                            style: TextStyle(color: Color(0xFF8B4513), fontWeight: FontWeight.bold),
+                          ),
+                          SizedBox(width: 8),
+                          IconButton(
+                            icon: Icon(Icons.remove_circle, color: Colors.red),
+                            onPressed: () {
+                              setState(() {
+                                cart.removeAt(index);
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.all(8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: cart.isEmpty ? null : _processOrder,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF8B4513), // Changed to khaki brown
+                      foregroundColor: Colors.white, // Changed to white text
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      disabledBackgroundColor: Colors.grey[300],
+                    ),
+                    child: Text('Process Order', style: TextStyle(fontSize: 16)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ProductCard extends StatelessWidget {
+  final Product product;
+  final Function(OrderItem) onAddToCart;
+
+  ProductCard({required this.product, required this.onAddToCart});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 3,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                image: DecorationImage(
+                  image: AssetImage('assets/images/bgcafe.jfif'),
+                  fit: BoxFit.cover,
+                ),
+              ),
+              child: product.stock <= 0
+                  ? Container(
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                ),
+                child: Center(
+                  child: Text(
+                    'OUT OF STOCK',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              )
+                  : null,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Padding(
+              padding: EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    product.name,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      color: Color(0xFF8B4513),
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    'Stock: ${product.stock}',
+                    style: TextStyle(
+                      color: product.stock <= 10 ? Colors.red : Colors.green,
+                      fontSize: 10,
+                    ),
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('S: ₱${product.smallPrice.toStringAsFixed(0)}',
+                              style: TextStyle(fontSize: 10, color: Color(0xFF8B4513))),
+                          Text('L: ₱${product.largePrice.toStringAsFixed(0)}',
+                              style: TextStyle(fontSize: 10, color: Color(0xFF8B4513))),
+                        ],
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.add_shopping_cart, size: 20, color: Color(0xFF8B4513)),
+                        onPressed: product.stock <= 0 ? null : () {
+                          _showSizeSelection(context);
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSizeSelection(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Select Size', style: TextStyle(color: Color(0xFF8B4513))),
+        backgroundColor: Colors.white,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text('Small - ₱${product.smallPrice.toStringAsFixed(2)}',
+                  style: TextStyle(color: Color(0xFF8B4513))),
+              onTap: () {
+                Navigator.pop(context);
+                onAddToCart(OrderItem(
+                  product: product,
+                  size: 'Small',
+                  quantity: 1,
+                ));
+              },
+            ),
+            ListTile(
+              title: Text('Large - ₱${product.largePrice.toStringAsFixed(2)}',
+                  style: TextStyle(color: Color(0xFF8B4513))),
+              onTap: () {
+                Navigator.pop(context);
+                onAddToCart(OrderItem(
+                  product: product,
+                  size: 'Large',
+                  quantity: 1,
+                ));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class InventoryScreen extends StatefulWidget {
+  @override
+  _InventoryScreenState createState() => _InventoryScreenState();
+}
+
+class _InventoryScreenState extends State<InventoryScreen> {
+  List<Product> products = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_products.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            products = (data['products'] as List)
+                .map((item) => Product.fromJson(item))
+                .toList();
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> updateStock(int productId, int newStock) async {
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost/cpecafe/update_stock.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'product_id': productId,
+          'stock': newStock,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          loadProducts(); // Refresh the list
+        }
+      }
+    } catch (e) {
+      print('Error updating stock: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.all(8),
+      itemCount: products.length,
+      itemBuilder: (context, index) {
+        final product = products[index];
+        return Card(
+          margin: EdgeInsets.symmetric(vertical: 4),
+          child: ListTile(
+            leading: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                image: DecorationImage(
+                  image: AssetImage('assets/images/bgcafe.jfif'),
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            title: Text(product.name, style: TextStyle(color: Color(0xFF8B4513))),
+            subtitle: Text('${product.category} • Stock: ${product.stock}',
+                style: TextStyle(color: Color(0xFF8B4513).withOpacity(0.7))),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: product.stock <= 10 ? Colors.red :
+                    product.stock <= 20 ? Colors.orange : Colors.green,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    product.stock <= 10 ? 'LOW' :
+                    product.stock <= 20 ? 'MEDIUM' : 'GOOD',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.edit, color: Color(0xFF8B4513)),
+                  onPressed: () => _showStockUpdateDialog(product),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showStockUpdateDialog(Product product) {
+    TextEditingController controller = TextEditingController(
+      text: product.stock.toString(),
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Update Stock: ${product.name}',
+            style: TextStyle(color: Color(0xFF8B4513))),
+        backgroundColor: Colors.white,
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Stock Quantity',
+            labelStyle: TextStyle(color: Color(0xFF8B4513)),
+            border: OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF8B4513)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF8B4513)),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              int? newStock = int.tryParse(controller.text);
+              if (newStock != null) {
+                updateStock(product.id, newStock);
+                Navigator.pop(context);
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Color(0xFF8B4513),
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Update'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SalesReportScreen extends StatefulWidget {
+  @override
+  _SalesReportScreenState createState() => _SalesReportScreenState();
+}
+
+class _SalesReportScreenState extends State<SalesReportScreen> {
+  Map<String, dynamic> salesData = {};
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadSalesReport();
+  }
+
+  Future<void> loadSalesReport() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_sales_report.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            salesData = data;
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Summary Cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildSummaryCard(
+                  'Total Sales',
+                  '₱${salesData['total_sales']?.toStringAsFixed(2) ?? '0.00'}',
+                  Icons.attach_money,
+                  Color(0xFF8B4513), // Changed to khaki brown
+                ),
+              ),
+              SizedBox(width: 16),
+              Expanded(
+                child: _buildSummaryCard(
+                  'Total Orders',
+                  '${salesData['total_orders'] ?? 0}',
+                  Icons.shopping_cart,
+                  Color(0xFF8B4513), // Changed to khaki brown
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
+          // Recent Orders
+          Text(
+            'Recent Orders',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF8B4513), // Changed to khaki brown
+            ),
+          ),
+          SizedBox(height: 8),
+          if (salesData['recent_orders'] != null)
+            ...((salesData['recent_orders'] as List).map((order) => Card(
+              elevation: 2,
+              margin: EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                title: Text('Order #${order['id']}',
+                    style: TextStyle(color: Color(0xFF8B4513))),
+                subtitle: Text('${order['created_at']}',
+                    style: TextStyle(color: Color(0xFF8B4513).withOpacity(0.7))),
+                trailing: Text('₱${double.parse(order['total']).toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: Color(0xFF8B4513),
+                      fontWeight: FontWeight.bold,
+                    )),
+              ),
+            )).toList()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard(String title, String value, IconData icon, Color color) {
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: color),
+                SizedBox(width: 8),
+                Text(title, style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+              ],
+            ),
+            SizedBox(height: 8),
+            Text(
+              value,
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+what is the missing part in this? import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+class MainScreen extends StatefulWidget {
+  @override
+  _MainScreenState createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 0;
+
+  List<Widget> _screens = [
+    OrderingScreen(),
+    InventoryScreen(),
+    SalesReportScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.local_cafe, color: Colors.white, size: 24),
+            ),
+            SizedBox(width: 12),
+            Text(
+              'CPE Cafe',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Color(0xFF8B4513),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+        actions: [
+          Container(
+            margin: EdgeInsets.only(right: 16),
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Icon(Icons.notifications_outlined, color: Colors.white),
+          ),
+        ],
+      ),
+      body: _screens[_selectedIndex],
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.3),
+              spreadRadius: 1,
+              blurRadius: 10,
+              offset: Offset(0, -2),
+            ),
+          ],
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _selectedIndex,
+          onTap: (index) {
+            setState(() {
+              _selectedIndex = index;
+            });
+          },
+          backgroundColor: Colors.white,
+          selectedItemColor: Color(0xFF8B4513),
+          unselectedItemColor: Colors.grey,
+          selectedLabelStyle: TextStyle(fontWeight: FontWeight.bold),
+          type: BottomNavigationBarType.fixed,
+          items: [
+            BottomNavigationBarItem(
+              icon: Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _selectedIndex == 0 ? Color(0xFF8B4513).withOpacity(0.1) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.home_outlined),
+              ),
+              activeIcon: Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Color(0xFF8B4513).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.home),
+              ),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _selectedIndex == 1 ? Color(0xFF8B4513).withOpacity(0.1) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.inventory_2_outlined),
+              ),
+              activeIcon: Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Color(0xFF8B4513).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.inventory_2),
+              ),
+              label: 'Inventory',
+            ),
+            BottomNavigationBarItem(
+              icon: Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: _selectedIndex == 2 ? Color(0xFF8B4513).withOpacity(0.1) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.analytics_outlined),
+              ),
+              activeIcon: Container(
+                padding: EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Color(0xFF8B4513).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.analytics),
+              ),
+              label: 'Reports',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class Product {
+  final int id;
+  final String name;
+  final String category;
+  final double largePrice;
+  final double smallPrice;
+  final int stock;
+  final String image;
+
+  Product({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.largePrice,
+    required this.smallPrice,
+    required this.stock,
+    required this.image,
+  });
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    return Product(
+      id: int.parse(json['id'].toString()),
+      name: json['name'],
+      category: json['category'],
+      largePrice: double.parse(json['large_price'].toString()),
+      smallPrice: double.parse(json['small_price'].toString()),
+      stock: int.parse(json['stock'].toString()),
+      image: json['image'] ?? 'images/default_product.jpg', // Allow custom images
+    );
+  }
+}
+
+class OrderItem {
+  final Product product;
+  final String size;
+  int quantity;
+
+  OrderItem({
+    required this.product,
+    required this.size,
+    required this.quantity,
+  });
+
+  double get totalPrice {
+    double unitPrice = size == 'Large' ? product.largePrice : product.smallPrice;
+    return unitPrice * quantity;
+  }
+}
+
+class OrderingScreen extends StatefulWidget {
+  @override
+  _OrderingScreenState createState() => _OrderingScreenState();
+}
+
+class _OrderingScreenState extends State<OrderingScreen> {
+  List<Product> products = [];
+  List<Product> filteredProducts = [];
+  Map<String, List<Product>> categorizedProducts = {};
+  List<OrderItem> cart = [];
+  bool isLoading = true;
+  String selectedCategory = 'All';
+  TextEditingController searchController = TextEditingController();
+  bool showCart = false;
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+    searchController.addListener(_filterProducts);
+  }
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterProducts() {
+    String query = searchController.text.toLowerCase();
+    setState(() {
+      if (query.isEmpty) {
+        filteredProducts = selectedCategory == 'All'
+            ? products
+            : categorizedProducts[selectedCategory] ?? [];
+      } else {
+        List<Product> baseProducts = selectedCategory == 'All'
+            ? products
+            : categorizedProducts[selectedCategory] ?? [];
+        filteredProducts = baseProducts.where((product) =>
+        product.name.toLowerCase().contains(query) ||
+            product.category.toLowerCase().contains(query)
+        ).toList();
+      }
+    });
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_products.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            products = (data['products'] as List)
+                .map((item) => Product.fromJson(item))
+                .toList();
+            filteredProducts = products;
+            categorizeProducts();
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+      _showErrorDialog('Failed to load products: $e');
+    }
+  }
+
+  void categorizeProducts() {
+    categorizedProducts = {'All': products};
+    for (var product in products) {
+      if (!categorizedProducts.containsKey(product.category)) {
+        categorizedProducts[product.category] = [];
+      }
+      categorizedProducts[product.category]!.add(product);
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red),
+            SizedBox(width: 8),
+            Text('Error', style: TextStyle(color: Colors.red)),
+          ],
+        ),
+        content: Text(message),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: TextStyle(color: Color(0xFF8B4513))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _processOrder() async {
+    if (cart.isEmpty) {
+      _showErrorDialog('Cart is empty!');
+      return;
+    }
+
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Color(0xFF8B4513)),
+            SizedBox(width: 16),
+            Text('Processing order...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost/cpecafe/process_order.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'items': cart.map((item) => {
+            'product_id': item.product.id,
+            'quantity': item.quantity,
+            'size': item.size,
+            'price': item.size == 'Large' ? item.product.largePrice : item.product.smallPrice,
+          }).toList(),
+          'total': cart.fold(0.0, (sum, item) => sum + item.totalPrice),
+        }),
+      );
+
+      Navigator.pop(context); // Close loading dialog
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            cart.clear();
+            showCart = false;
+          });
+          _showSuccessDialog('Order processed successfully!');
+          loadProducts();
+        } else {
+          _showErrorDialog(data['message'] ?? 'Failed to process order');
+        }
+      }
+    } catch (e) {
+      Navigator.pop(context); // Close loading dialog
+      _showErrorDialog('Failed to process order: $e');
+    }
+  }
+
+  void _showSuccessDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.check_circle_outline, color: Colors.green),
+            SizedBox(width: 8),
+            Text('Success', style: TextStyle(color: Colors.green)),
+          ],
+        ),
+        content: Text(message),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: TextStyle(color: Color(0xFF8B4513))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showCartSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => CartSheet(
+        cart: cart,
+        onUpdateQuantity: (index, newQuantity) {
+          setState(() {
+            if (newQuantity <= 0) {
+              cart.removeAt(index);
+            } else {
+              cart[index].quantity = newQuantity;
+            }
+          });
+          Navigator.pop(context);
+        },
+        onRemoveItem: (index) {
+          setState(() {
+            cart.removeAt(index);
+          });
+          Navigator.pop(context);
+        },
+        onProcessOrder: _processOrder,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+            ),
+            SizedBox(height: 16),
+            Text('Loading products...', style: TextStyle(color: Color(0xFF8B4513))),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        // Header with Search Bar and Cart
+        Container(
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFF8B4513), Colors.grey[50]!],
+              stops: [0.0, 1.0],
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(25),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.1),
+                            spreadRadius: 1,
+                            blurRadius: 10,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: TextField(
+                        controller: searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Search products...',
+                          hintStyle: TextStyle(color: Colors.grey[400]),
+                          prefixIcon: Icon(Icons.search, color: Color(0xFF8B4513)),
+                          suffixIcon: searchController.text.isNotEmpty
+                              ? IconButton(
+                            icon: Icon(Icons.clear, color: Colors.grey),
+                            onPressed: () {
+                              searchController.clear();
+                            },
+                          )
+                              : null,
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  GestureDetector(
+                    onTap: cart.isEmpty ? null : _showCartSheet,
+                    child: Stack(
+                      children: [
+                        Container(
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: cart.isEmpty ? Colors.grey[400] : Color(0xFF8B4513),
+                            borderRadius: BorderRadius.circular(25),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.2),
+                                spreadRadius: 1,
+                                blurRadius: 5,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Icon(Icons.shopping_cart, color: Colors.white, size: 24),
+                        ),
+                        if (cart.isNotEmpty)
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            child: Container(
+                              padding: EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Colors.red,
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              constraints: BoxConstraints(
+                                minWidth: 16,
+                                minHeight: 16,
+                              ),
+                              child: Text(
+                                '${cart.fold(0, (sum, item) => sum + item.quantity)}',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 16),
+              // Category Chips
+              Container(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: categorizedProducts.keys.map((category) {
+                    bool isSelected = selectedCategory == category;
+                    return Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: FilterChip(
+                        label: Text(category),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          setState(() {
+                            selectedCategory = category;
+                            _filterProducts();
+                          });
+                        },
+                        backgroundColor: Colors.white,
+                        selectedColor: Color(0xFF8B4513),
+                        checkmarkColor: Colors.white,
+                        labelStyle: TextStyle(
+                          color: isSelected ? Colors.white : Color(0xFF8B4513),
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        elevation: isSelected ? 3 : 1,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Best Selling Section
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          alignment: Alignment.centerLeft,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                searchController.text.isNotEmpty
+                    ? 'Search Results (${filteredProducts.length})'
+                    : 'Menu Items',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Color(0xFF8B4513).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.tune, color: Color(0xFF8B4513)),
+              ),
+            ],
+          ),
+        ),
+
+        // Products Grid
+        Expanded(
+          child: filteredProducts.isEmpty
+              ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.search_off,
+                  size: 64,
+                  color: Colors.grey[400],
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'No products found',
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                if (searchController.text.isNotEmpty) ...[
+                  SizedBox(height: 8),
+                  Text(
+                    'Try searching with different keywords',
+                    style: TextStyle(color: Colors.grey[500]),
+                  ),
+                ],
+              ],
+            ),
+          )
+              : GridView.builder(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.75,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: filteredProducts.length,
+            itemBuilder: (context, index) {
+              final product = filteredProducts[index];
+              return ModernProductCard(
+                product: product,
+                onTap: () => _showProductDetail(product),
+                onAddToCart: (orderItem) {
+                  if (product.stock <= 0) {
+                    _showErrorDialog('${product.name} is out of stock!');
+                    return;
+                  }
+
+                  setState(() {
+                    int existingIndex = cart.indexWhere((item) =>
+                    item.product.id == orderItem.product.id &&
+                        item.size == orderItem.size);
+
+                    if (existingIndex != -1) {
+                      cart[existingIndex].quantity += orderItem.quantity;
+                    } else {
+                      cart.add(orderItem);
+                    }
+                  });
+
+                  // Show snackbar
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('${product.name} added to cart'),
+                      backgroundColor: Color(0xFF8B4513),
+                      duration: Duration(seconds: 1),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+
+        // Cart Summary
+        if (cart.isNotEmpty)
+          Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.3),
+                  spreadRadius: 1,
+                  blurRadius: 5,
+                  offset: Offset(0, -2),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _showCartSheet,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '${cart.fold(0, (sum, item) => sum + item.quantity)} items in cart',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            '₱${cart.fold(0.0, (sum, item) => sum + item.totalPrice).toStringAsFixed(2)}',
+                            style: TextStyle(
+                              color: Color(0xFF8B4513),
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: _processOrder,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF8B4513),
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(25),
+                      ),
+                      elevation: 3,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.payment, size: 18),
+                        SizedBox(width: 8),
+                        Text('Order Now', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _showProductDetail(Product product) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ProductDetailSheet(
+        product: product,
+        onAddToCart: (orderItem) {
+          if (product.stock <= 0) {
+            _showErrorDialog('${product.name} is out of stock!');
+            return;
+          }
+
+          setState(() {
+            int existingIndex = cart.indexWhere((item) =>
+            item.product.id == orderItem.product.id &&
+                item.size == orderItem.size);
+
+            if (existingIndex != -1) {
+              cart[existingIndex].quantity += orderItem.quantity;
+            } else {
+              cart.add(orderItem);
+            }
+          });
+          Navigator.pop(context);
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${product.name} added to cart'),
+              backgroundColor: Color(0xFF8B4513),
+              duration: Duration(seconds: 1),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class CartSheet extends StatelessWidget {
+  final List<OrderItem> cart;
+  final Function(int, int) onUpdateQuantity;
+  final Function(int) onRemoveItem;
+  final VoidCallback onProcessOrder;
+
+  CartSheet({
+    required this.cart,
+    required this.onUpdateQuantity,
+    required this.onRemoveItem,
+    required this.onProcessOrder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    double total = cart.fold(0.0, (sum, item) => sum + item.totalPrice);
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.9,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.symmetric(vertical: 10),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+
+              // Header
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Your Cart (${cart.length})',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF8B4513),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: Icon(Icons.close, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Cart Items
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  padding: EdgeInsets.symmetric(horizontal: 20),
+                  itemCount: cart.length,
+                  itemBuilder: (context, index) {
+                    final item = cart[index];
+                    return Container(
+                      margin: EdgeInsets.only(bottom: 12),
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          // Product Image
+                          Container(
+                            width: 60,
+                            height: 60,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(8),
+                              image: DecorationImage(
+                                image: AssetImage(item.product.image),
+                                fit: BoxFit.cover,
+                                onError: (exception, stackTrace) {
+                                  // Fallback image
+                                },
+                              ),
+                            ),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(8),
+                                color: Color(0xFF8B4513).withOpacity(0.8),
+                              ),
+                              child: Icon(
+                                Icons.local_cafe,
+                                color: Colors.white,
+                                size: 30,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 12),
+
+                          // Product Details
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.product.name,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                                Text(
+                                  'Size: ${item.size}',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  '₱${(item.size == 'Large' ? item.product.largePrice : item.product.smallPrice).toStringAsFixed(2)} each',
+                                  style: TextStyle(
+                                    color: Color(0xFF8B4513),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+
+                          // Quantity Controls
+                          Column(
+                            children: [
+                              Row(
+                                children: [
+                                  GestureDetector(
+                                    onTap: () => onUpdateQuantity(index, item.quantity - 1),
+                                    child: Container(
+                                      padding: EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey[300],
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Icon(Icons.remove, size: 16),
+                                    ),
+                                  ),
+                                  Container(
+                                    margin: EdgeInsets.symmetric(horizontal: 12),
+                                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(color: Colors.grey[300]!),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      '${item.quantity}',
+                                      style: TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                  ),
+                                  GestureDetector(
+                                    onTap: () => onUpdateQuantity(index, item.quantity + 1),
+                                    child: Container(
+                                      padding: EdgeInsets.all(6),
+                                      decoration: BoxDecoration(
+                                        color: Color(0xFF8B4513),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Icon(Icons.add, size: 16, color: Colors.white),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                '₱${item.totalPrice.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Color(0xFF8B4513),
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          // Remove Button
+                          IconButton(
+                            onPressed: () => onRemoveItem(index),
+                            icon: Icon(Icons.delete_outline, color: Colors.red),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+              // Total and Checkout
+              Container(
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.2),
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                      offset: Offset(0, -2),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Total',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          Text(
+                            '₱${total.toStringAsFixed(2)}',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF8B4513),
+                            ),
+                          ),
+                        ],
+                      ),
+                      SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: onProcessOrder,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF8B4513),
+                            foregroundColor: Colors.white,
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(25),
+                            ),
+                            elevation: 3,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.payment, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                'Checkout - ₱${total.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class ModernProductCard extends StatelessWidget {
+  final Product product;
+  final VoidCallback onTap;
+  final Function(OrderItem) onAddToCart;
+
+  ModernProductCard({
+    required this.product,
+    required this.onTap,
+    required this.onAddToCart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              spreadRadius: 1,
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Product Image with Heart Icon
+            Expanded(
+              flex: 3,
+              child: Stack(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                      color: Colors.grey[200],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                      child: Image.asset(
+                        product.image,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Color(0xFF8B4513).withOpacity(0.1),
+                              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.local_cafe,
+                                color: Color(0xFF8B4513),
+                                size: 40,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  if (product.stock <= 0)
+                    Container(
+                      width: double.infinity,
+                      height: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                      ),
+                      child: Center(
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            'OUT OF STOCK',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.3),
+                            spreadRadius: 1,
+                            blurRadius: 3,
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.favorite_border,
+                        color: Colors.grey[600],
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                  if (product.stock <= 10 && product.stock > 0)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.orange,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'Low Stock',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // Product Info
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.black87,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      product.category,
+                      style: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 12,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Text(
+                          '₱${product.smallPrice.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            color: Color(0xFF8B4513),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          ' - ₱${product.largePrice.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Spacer(),
+                    Container(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: product.stock <= 0 ? null : () => _showSizeSelection(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: product.stock <= 0 ? Colors.grey[400] : Color(0xFF8B4513),
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          elevation: product.stock <= 0 ? 0 : 2,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.add_shopping_cart, size: 16),
+                            SizedBox(width: 4),
+                            Text(
+                              product.stock <= 0 ? 'Out of Stock' : 'Add to Cart',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSizeSelection(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.local_cafe, color: Color(0xFF8B4513)),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Select Size - ${product.name}',
+                style: TextStyle(color: Color(0xFF8B4513), fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildSizeOption(
+              context,
+              'Small',
+              product.smallPrice,
+              Icons.coffee,
+            ),
+            SizedBox(height: 8),
+            _buildSizeOption(
+              context,
+              'Large',
+              product.largePrice,
+              Icons.local_cafe,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSizeOption(BuildContext context, String size, double price, IconData icon) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.pop(context);
+        onAddToCart(OrderItem(
+          product: product,
+          size: size,
+          quantity: 1,
+        ));
+      },
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(12),
+          color: Colors.grey[50],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Color(0xFF8B4513).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: Color(0xFF8B4513)),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    size,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Color(0xFF8B4513),
+                    ),
+                  ),
+                  Text(
+                    '₱${price.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: Colors.grey[600],
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios, color: Colors.grey[400], size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProductDetailSheet extends StatefulWidget {
+  final Product product;
+  final Function(OrderItem) onAddToCart;
+
+  ProductDetailSheet({required this.product, required this.onAddToCart});
+
+  @override
+  _ProductDetailSheetState createState() => _ProductDetailSheetState();
+}
+
+class _ProductDetailSheetState extends State<ProductDetailSheet> {
+  String selectedSize = 'Small';
+  int quantity = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    double currentPrice = selectedSize == 'Large'
+        ? widget.product.largePrice
+        : widget.product.smallPrice;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.9,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              // Handle bar
+              Container(
+                margin: EdgeInsets.symmetric(vertical: 10),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+
+              Expanded(
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  child: Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Product Image
+                        Container(
+                          height: 200,
+                          width: double.infinity,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            color: Colors.grey[200],
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: Image.asset(
+                              widget.product.image,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) {
+                                return Container(
+                                  decoration: BoxDecoration(
+                                    color: Color(0xFF8B4513).withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.local_cafe,
+                                      color: Color(0xFF8B4513),
+                                      size: 60,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 20),
+
+                        // Product Name and Category
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    widget.product.name,
+                                    style: TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Container(
+                                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Color(0xFF8B4513).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(20),
+                                    ),
+                                    child: Text(
+                                      widget.product.category,
+                                      style: TextStyle(
+                                        color: Color(0xFF8B4513),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Container(
+                              padding: EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.favorite_border,
+                                color: Colors.red,
+                                size: 20,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        SizedBox(height: 16),
+
+                        // Price
+                        Text(
+                          '₱${currentPrice.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF8B4513),
+                          ),
+                        ),
+                        SizedBox(height: 16),
+
+                        // Description
+                        Text(
+                          'Description',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Delicious ${widget.product.name.toLowerCase()} made with premium ingredients. Perfect for any time of the day. Crafted with love and served fresh to give you the best coffee experience.',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                            height: 1.5,
+                          ),
+                        ),
+                        SizedBox(height: 20),
+
+                        // Stock Info
+                        Container(
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: widget.product.stock <= 10
+                                ? Colors.orange.withOpacity(0.1)
+                                : Colors.green.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: widget.product.stock <= 10
+                                  ? Colors.orange.withOpacity(0.3)
+                                  : Colors.green.withOpacity(0.3),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.inventory_2,
+                                color: widget.product.stock <= 10 ? Colors.orange : Colors.green,
+                                size: 20,
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Stock: ${widget.product.stock} items available',
+                                style: TextStyle(
+                                  color: widget.product.stock <= 10 ? Colors.orange[800] : Colors.green[800],
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              if (widget.product.stock <= 10)
+                                Container(
+                                  margin: EdgeInsets.only(left: 8),
+                                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    'LOW',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        SizedBox(height: 20),
+
+                        // Size Selection
+                        Text(
+                          'Select Size',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildSizeButton('Small', widget.product.smallPrice, Icons.coffee),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: _buildSizeButton('Large', widget.product.largePrice, Icons.local_cafe),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 20),
+
+                        // Quantity Selection
+                        Text(
+                          'Quantity',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        SizedBox(height: 12),
+                        Row(
+                          children: [
+                            GestureDetector(
+                              onTap: quantity > 1 ? () {
+                                setState(() {
+                                  quantity--;
+                                });
+                              } : null,
+                              child: Container(
+                                padding: EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: quantity > 1 ? Color(0xFF8B4513) : Colors.grey[300],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.remove,
+                                  color: quantity > 1 ? Colors.white : Colors.grey,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                            Container(
+                              margin: EdgeInsets.symmetric(horizontal: 20),
+                              padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey[300]!),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '$quantity',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: quantity < widget.product.stock ? () {
+                                setState(() {
+                                  quantity++;
+                                });
+                              } : null,
+                              child: Container(
+                                padding: EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: quantity < widget.product.stock
+                                      ? Color(0xFF8B4513)
+                                      : Colors.grey[300],
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  Icons.add,
+                                  color: quantity < widget.product.stock
+                                      ? Colors.white
+                                      : Colors.grey,
+                                  size: 20,
+                                ),
+                              ),
+                            ),
+                            Spacer(),
+                            Text(
+                              'Total: ₱${(currentPrice * quantity).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF8B4513),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 30),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+              // Add to Cart Button
+              Container(
+                padding: EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.grey.withOpacity(0.2),
+                      spreadRadius: 1,
+                      blurRadius: 5,
+                      offset: Offset(0, -2),
+                    ),
+                  ],
+                ),
+                child: SafeArea(
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: widget.product.stock <= 0 ? null : () {
+                        widget.onAddToCart(OrderItem(
+                          product: widget.product,
+                          size: selectedSize,
+                          quantity: quantity,
+                        ));
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: widget.product.stock <= 0 ? Colors.grey[400] : Color(0xFF8B4513),
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        elevation: widget.product.stock <= 0 ? 0 : 3,
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_shopping_cart, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            widget.product.stock <= 0
+                                ? 'Out of Stock'
+                                : 'Add to Cart - ₱${(currentPrice * quantity).toStringAsFixed(2)}',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSizeButton(String size, double price, IconData icon) {
+    bool isSelected = selectedSize == size;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          selectedSize = size;
+        });
+      },
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected ? Color(0xFF8B4513) : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? Color(0xFF8B4513) : Colors.grey[300]!,
+            width: 2,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? Colors.white : Color(0xFF8B4513),
+              size: 24,
+            ),
+            SizedBox(height: 8),
+            Text(
+              size,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+                color: isSelected ? Colors.white : Color(0xFF8B4513),
+              ),
+            ),
+            Text(
+              '₱${price.toStringAsFixed(2)}',
+              style: TextStyle(
+                fontSize: 14,
+                color: isSelected ? Colors.white.withOpacity(0.9) : Colors.grey[600],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Enhanced Inventory Screen
+class InventoryScreen extends StatefulWidget {
+  @override
+  _InventoryScreenState createState() => _InventoryScreenState();
+}
+
+class _InventoryScreenState extends State<InventoryScreen> {
+  List<Product> products = [];
+  bool isLoading = true;
+  String selectedFilter = 'All';
+  TextEditingController searchController = TextEditingController();
+  List<Product> filteredProducts = [];
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+    searchController.addListener(_filterProducts);
+  }
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  void _filterProducts() {
+    String query = searchController.text.toLowerCase();
+    setState(() {
+      filteredProducts = products.where((product) {
+        bool matchesSearch = product.name.toLowerCase().contains(query) ||
+            product.category.toLowerCase().contains(query);
+        bool matchesFilter = selectedFilter == 'All' ||
+            (selectedFilter == 'Low Stock' && product.stock <= 10) ||
+            (selectedFilter == 'Out of Stock' && product.stock == 0) ||
+            (selectedFilter == 'Available' && product.stock > 0);
+        return matchesSearch && matchesFilter;
+      }).toList();
+    });
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_products.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            products = (data['products'] as List)
+                .map((item) => Product.fromJson(item))
+                .toList();
+            filteredProducts = products;
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> updateStock(int productId, int newStock) async {
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost/cpecafe/update_stock.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'product_id': productId,
+          'stock': newStock,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          loadProducts();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Stock updated successfully'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating stock: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+            ),
+            SizedBox(height: 16),
+            Text('Loading inventory...', style: TextStyle(color: Color(0xFF8B4513))),
+          ],
+        ),
+      );
+    }
+
+    // Calculate statistics
+    int totalProducts = products.length;
+    int lowStock = products.where((p) => p.stock <= 10 && p.stock > 0).length;
+    int outOfStock = products.where((p) => p.stock == 0).length;
+    int totalStockValue = products.fold(0, (sum, p) => sum + p.stock);
+
+    return Column(
+      children: [
+        // Header with Stats
+        Container(
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF8B4513), Color(0xFFA0522D)],
+            ),
+          ),
+          child: Column(
+            children: [
+              // Stats Cards
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildStatCard('Total Items', '$totalProducts', Icons.inventory_2, Colors.white),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: _buildStatCard('Low Stock', '$lowStock', Icons.warning, Colors.orange[100]!),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: _buildStatCard('Out of Stock', '$outOfStock', Icons.remove_circle, Colors.red[100]!),
+                  ),
+                ],
+              ),
+              SizedBox(height: 16),
+
+              // Search Bar
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(25),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      spreadRadius: 1,
+                      blurRadius: 10,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: TextField(
+                  controller: searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search inventory...',
+                    hintStyle: TextStyle(color: Colors.grey[400]),
+                    prefixIcon: Icon(Icons.search, color: Color(0xFF8B4513)),
+                    suffixIcon: searchController.text.isNotEmpty
+                        ? IconButton(
+                      icon: Icon(Icons.clear, color: Colors.grey),
+                      onPressed: () {
+                        searchController.clear();
+                      },
+                    )
+                        : null,
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Filter Chips
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: ['All', 'Available', 'Low Stock', 'Out of Stock'].map((filter) {
+                bool isSelected = selectedFilter == filter;
+                return Padding(
+                  padding: EdgeInsets.only(right: 8),
+                  child: FilterChip(
+                    label: Text(filter),
+                    selected: isSelected,
+                    onSelected: (selected) {
+                      setState(() {
+                        selectedFilter = filter;
+                        _filterProducts();
+                      });
+                    },
+                    backgroundColor: Colors.grey[100],
+                    selectedColor: Color(0xFF8B4513),
+                    checkmarkColor: Colors.white,
+                    labelStyle: TextStyle(
+                      color: isSelected ? Colors.white : Color(0xFF8B4513),
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+
+        // Inventory List
+        Expanded(
+          child: filteredProducts.isEmpty
+              ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.inventory_2_outlined,
+                  size: 64,
+                  color: Colors.grey[400],
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'No products found',
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          )
+              : RefreshIndicator(
+            color: Color(0xFF8B4513),
+            onRefresh: loadProducts,
+            child: ListView.builder(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              itemCount: filteredProducts.length,
+              itemBuilder: (context, index) {
+                final product = filteredProducts[index];
+                return Container(
+                  margin: EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.grey.withOpacity(0.1),
+                        spreadRadius: 1,
+                        blurRadius: 5,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: ListTile(
+                    contentPadding: EdgeInsets.all(16),
+                    leading: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        color: Colors.grey[200],
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.asset(
+                          product.image,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: Color(0xFF8B4513).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                Icons.local_cafe,
+                                color: Color(0xFF8B4513),
+                                size: 30,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    title: Text(
+                      product.name,
+                      style: TextStyle(
+                        color: Color(0xFF8B4513),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(height: 4),
+                        Text(
+                          '${product.category}',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 12,
+                          ),
+                        ),
+                        SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Text(
+                              'Stock: ${product.stock}',
+                              style: TextStyle(
+                                color: product.stock <= 10
+                                    ? (product.stock == 0 ? Colors.red : Colors.orange)
+                                    : Colors.green,
+                                fontWeight: FontWeight.w500,
+                                fontSize: 14,
+                              ),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              '₱${product.smallPrice.toStringAsFixed(2)} - ₱${product.largePrice.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: Colors.grey[500],
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: product.stock <= 0 ? Colors.red :
+                            product.stock <= 10 ? Colors.orange : Colors.green,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            product.stock <= 0 ? 'OUT' :
+                            product.stock <= 10 ? 'LOW' : 'GOOD',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        SizedBox(width: 8),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Color(0xFF8B4513).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: IconButton(
+                            icon: Icon(Icons.edit, color: Color(0xFF8B4513), size: 20),
+                            onPressed: () => _showStockUpdateDialog(product),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStatCard(String title, String value, IconData icon, Color backgroundColor) {
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 3,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: Color(0xFF8B4513), size: 24),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF8B4513),
+            ),
+          ),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 10,
+              color: Color(0xFF8B4513).withOpacity(0.7),
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showStockUpdateDialog(Product product) {
+    TextEditingController controller = TextEditingController(
+      text: product.stock.toString(),
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Color(0xFF8B4513).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.edit, color: Color(0xFF8B4513)),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Update Stock',
+                    style: TextStyle(color: Color(0xFF8B4513), fontSize: 18),
+                  ),
+                  Text(
+                    product.name,
+                    style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.white,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey[50],
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Current stock: ${product.stock}',
+                    style: TextStyle(color: Colors.grey[700]),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'New Stock Quantity',
+                labelStyle: TextStyle(color: Color(0xFF8B4513)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey[300]!),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Color(0xFF8B4513), width: 2),
+                ),
+                prefixIcon: Icon(Icons.inventory_2, color: Color(0xFF8B4513)),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              int? newStock = int.tryParse(controller.text);
+              if (newStock != null && newStock >= 0) {
+                updateStock(product.id, newStock);
+                Navigator.pop(context);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Please enter a valid stock quantity'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Color(0xFF8B4513),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text('Update'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Enhanced Sales Report Screen
+class SalesReportScreen extends StatefulWidget {
+  @override
+  _SalesReportScreenState createState() => _SalesReportScreenState();
+}
+
+class _SalesReportScreenState extends State<SalesReportScreen> {
+  Map<String, dynamic> salesData = {};
+  bool isLoading = true;
+  String selectedPeriod = 'Today';
+
+  @override
+  void initState() {
+    super.initState();
+    loadSalesReport();
+  }
+
+  Future<void> loadSalesReport() async {
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_sales_report.php?period=$selectedPeriod'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            salesData = data;
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+            ),
+            SizedBox(height: 16),
+            Text('Loading sales report...', style: TextStyle(color: Color(0xFF8B4513))),
+          ],
+        ),
+      );
+    }
+
+    double totalSales = double.tryParse(salesData['total_sales']?.toString() ?? '0') ?? 0.0;
+    int totalOrders = int.tryParse(salesData['total_orders']?.toString() ?? '0') ?? 0;
+    int totalItems = int.tryParse(salesData['total_items']?.toString() ?? '0') ?? 0;
+    double averageOrder = totalOrders > 0 ? totalSales / totalOrders : 0.0;
+
+    return Column(
+      children: [
+        // Header with Period Selection
+        Container(
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF8B4513), Color(0xFFA0522D)],
+            ),
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Sales Report',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.analytics, color: Colors.white),
+                  ),
+                ],
+              ),
+              SizedBox(height: 16),
+
+              // Period Selection
+              Container(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: ['Today', 'This Week', 'This Month', 'All Time'].map((period) {
+                    bool isSelected = selectedPeriod == period;
+                    return Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: FilterChip(
+                        label: Text(period),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          setState(() {
+                            selectedPeriod = period;
+                          });
+                          loadSalesReport();
+                        },
+                        backgroundColor: Colors.white.withOpacity(0.2),
+                        selectedColor: Colors.white,
+                        checkmarkColor: Color(0xFF8B4513),
+                        labelStyle: TextStyle(
+                          color: isSelected ? Color(0xFF8B4513) : Colors.white,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        Expanded(
+          child: RefreshIndicator(
+            color: Color(0xFF8B4513),
+            onRefresh: loadSalesReport,
+            child: SingleChildScrollView(
+              padding: EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Summary Cards
+                  GridView.count(
+                    shrinkWrap: true,
+                    physics: NeverScrollableScrollPhysics(),
+                    crossAxisCount: 2,
+                    childAspectRatio: 1.5,
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    children: [
+                      _buildSummaryCard(
+                        'Total Sales',
+                        '₱${totalSales.toStringAsFixed(2)}',
+                        Icons.attach_money,
+                        Colors.green,
+                      ),
+                      _buildSummaryCard(
+                        'Total Orders',
+                        '$totalOrders',
+                        Icons.shopping_cart,
+                        Colors.blue,
+                      ),
+                      _buildSummaryCard(
+                        'Items Sold',
+                        '$totalItems',
+                        Icons.inventory,
+                        Colors.orange,
+                      ),
+                      _buildSummaryCard(
+                        'Avg. Order',
+                        '₱${averageOrder.toStringAsFixed(2)}',
+                        Icons.trending_up,
+                        Colors.purple,
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 24),
+
+                  // Top Selling Products
+                  if (salesData['top_products'] != null && (salesData['top_products'] as List).isNotEmpty) ...[
+                    Text(
+                      'Top Selling Products',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF8B4513),
+                      ),
+                    ),
+                    SizedBox(height: 12),
+                    ...((salesData['top_products'] as List).map((product) => Container(
+                      margin: EdgeInsets.only(bottom: 8),
+                      padding: EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.1),
+                            spreadRadius: 1,
+                            blurRadius: 5,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color: Color(0xFF8B4513).withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Icon(
+                              Icons.local_cafe,
+                              color: Color(0xFF8B4513),
+                              size: 25,
+                            ),
+                          ),
+                          SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  product['name'],
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF8B4513),
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                Text(
+                                  '${product['total_sold']} sold',
+                                  style: TextStyle(
+                                    color: Colors.grey[600],
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Color(0xFF8B4513),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '₱${double.parse(product['total_revenue']).toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )).toList()),
+                    SizedBox(height: 24),
+                  ],
+
+                  // Recent Orders
+                  Text(
+                    'Recent Orders',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF8B4513),
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  if (salesData['recent_orders'] != null)
+                    ...((salesData['recent_orders'] as List).map((order) => Container(
+                      margin: EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.1),
+                            spreadRadius: 1,
+                            blurRadius: 5,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: ListTile(
+                        contentPadding: EdgeInsets.all(16),
+                        leading: Container(
+                          padding: EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Color(0xFF8B4513).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.receipt,
+                            color: Color(0xFF8B4513),
+                            size: 20,
+                          ),
+                        ),
+                        title: Text(
+                          'Order #${order['id']}',
+                          style: TextStyle(
+                            color: Color(0xFF8B4513),
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            SizedBox(height: 4),
+                            Text(
+                              '${order['created_at']}',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 12,
+                              ),
+                            ),
+                            Text(
+                              '${order['items_count']} items',
+                              style: TextStyle(
+                                color: Colors.grey[500],
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                        trailing: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.green.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '₱${double.parse(order['total']).toStringAsFixed(2)}',
+                            style: TextStyle(
+                              color: Colors.green[700],
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )).toList())
+                  else
+                    Container(
+                      padding: EdgeInsets.all(32),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            Icon(
+                              Icons.receipt_long_outlined,
+                              size: 48,
+                              color: Colors.grey[400],
+                            ),
+                            SizedBox(height: 12),
+                            Text(
+                              'No recent orders',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryCard(String title, String value, IconData icon, Color color) {
+    return Container(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 5,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              Spacer(),
+              Icon(Icons.more_horiz, color: Colors.grey[400], size: 16),
+            ],
+          ),
+          SizedBox(height: 12),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  } at thte bottom can u continue
+  
+  
+  why the search bar and cart doestn have function? make fully functional and then the image they dont recognize as display i want rsana every item makakapag set ako ng iba ibang pic first thing frist make it functional aadn then ung ui ayusin sa inventory and report make upgrade and pati ung nav wag lang ung simple text\ i clarify that na meron siyang hive kahit magpunta sa kabilang tab ung screen like forexample is nag add to cart ka then naglipat ka ng tab sa reports pagbalik dapat sa tab nadun pa ung add tocart na order magssave ung data na pinrocess dito  import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+class MainScreen extends StatefulWidget {
+  @override
+  _MainScreenState createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 0;
+
+  List<Widget> _screens = [
+    OrderingScreen(),
+    InventoryScreen(),
+    SalesReportScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('CPE Cafe'),
+        centerTitle: true,
+        backgroundColor: Color(0xFF8B4513),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        automaticallyImplyLeading: false,
+      ),
+      body: _screens[_selectedIndex],
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _selectedIndex,
+        onTap: (index) {
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
+        backgroundColor: Colors.white,
+        selectedItemColor: Color(0xFF8B4513),
+        unselectedItemColor: Colors.grey,
+        items: [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.inventory),
+            label: 'Inventory',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.analytics),
+            label: 'Reports',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class Product {
+  final int id;
+  final String name;
+  final String category;
+  final double largePrice;
+  final double smallPrice;
+  final int stock;
+  final String image;
+
+  Product({
+    required this.id,
+    required this.name,
+    required this.category,
+    required this.largePrice,
+    required this.smallPrice,
+    required this.stock,
+    required this.image,
+  });
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    return Product(
+      id: int.parse(json['id'].toString()),
+      name: json['name'],
+      category: json['category'],
+      largePrice: double.parse(json['large_price'].toString()),
+      smallPrice: double.parse(json['small_price'].toString()),
+      stock: int.parse(json['stock'].toString()),
+      image: 'images/bgcafe.jfif',
+    );
+  }
+}
+
+class OrderItem {
+  final Product product;
+  final String size;
+  int quantity;
+
+  OrderItem({
+    required this.product,
+    required this.size,
+    required this.quantity,
+  });
+
+  double get totalPrice {
+    double unitPrice = size == 'Large' ? product.largePrice : product.smallPrice;
+    return unitPrice * quantity;
+  }
+}
+
+class OrderingScreen extends StatefulWidget {
+  @override
+  _OrderingScreenState createState() => _OrderingScreenState();
+}
+
+class _OrderingScreenState extends State<OrderingScreen> {
+  List<Product> products = [];
+  Map<String, List<Product>> categorizedProducts = {};
+  List<OrderItem> cart = [];
+  bool isLoading = true;
+  String selectedCategory = 'All';
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_products.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            products = (data['products'] as List)
+                .map((item) => Product.fromJson(item))
+                .toList();
+            categorizeProducts();
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+      _showErrorDialog('Failed to load products: $e');
+    }
+  }
+
+  void categorizeProducts() {
+    categorizedProducts = {'All': products};
+    for (var product in products) {
+      if (!categorizedProducts.containsKey(product.category)) {
+        categorizedProducts[product.category] = [];
+      }
+      categorizedProducts[product.category]!.add(product);
+    }
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Error', style: TextStyle(color: Color(0xFF8B4513))),
+        content: Text(message),
+        backgroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: TextStyle(color: Color(0xFF8B4513))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _processOrder() async {
+    if (cart.isEmpty) {
+      _showErrorDialog('Cart is empty!');
+      return;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost/cpecafe/process_order.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'items': cart.map((item) => {
+            'product_id': item.product.id,
+            'quantity': item.quantity,
+            'size': item.size,
+            'price': item.size == 'Large' ? item.product.largePrice : item.product.smallPrice,
+          }).toList(),
+          'total': cart.fold(0.0, (sum, item) => sum + item.totalPrice),
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            cart.clear();
+          });
+          _showSuccessDialog('Order processed successfully!');
+          loadProducts();
+        } else {
+          _showErrorDialog(data['message'] ?? 'Failed to process order');
+        }
+      }
+    } catch (e) {
+      _showErrorDialog('Failed to process order: $e');
+    }
+  }
+
+  void _showSuccessDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Success', style: TextStyle(color: Color(0xFF8B4513))),
+        content: Text(message),
+        backgroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('OK', style: TextStyle(color: Color(0xFF8B4513))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+        ),
+      );
+    }
+
+    List<Product> displayProducts = selectedCategory == 'All'
+        ? products
+        : categorizedProducts[selectedCategory] ?? [];
+
+    return Column(
+      children: [
+        // Header with Search Bar and Cart
+        Container(
+          padding: EdgeInsets.all(16),
+          color: Colors.grey[50],
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(25),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.2),
+                            spreadRadius: 1,
+                            blurRadius: 5,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: TextField(
+                        decoration: InputDecoration(
+                          hintText: 'Search products...',
+                          prefixIcon: Icon(Icons.search, color: Colors.grey),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Stack(
+                    children: [
+                      Container(
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Color(0xFF8B4513),
+                          borderRadius: BorderRadius.circular(25),
+                        ),
+                        child: Icon(Icons.shopping_cart, color: Colors.white, size: 24),
+                      ),
+                      if (cart.isNotEmpty)
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Container(
+                            padding: EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            constraints: BoxConstraints(
+                              minWidth: 16,
+                              minHeight: 16,
+                            ),
+                            child: Text(
+                              '${cart.length}',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              SizedBox(height: 16),
+              // Category Chips
+              Container(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: categorizedProducts.keys.map((category) {
+                    bool isSelected = selectedCategory == category;
+                    return Padding(
+                      padding: EdgeInsets.only(right: 8),
+                      child: FilterChip(
+                        label: Text(category),
+                        selected: isSelected,
+                        onSelected: (selected) {
+                          setState(() {
+                            selectedCategory = category;
+                          });
+                        },
+                        backgroundColor: Colors.white,
+                        selectedColor: Color(0xFF8B4513),
+                        checkmarkColor: Colors.white,
+                        labelStyle: TextStyle(
+                          color: isSelected ? Colors.white : Color(0xFF8B4513),
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Best Selling Section
+        Container(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          alignment: Alignment.centerLeft,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Best Selling',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.black87,
+                ),
+              ),
+              Icon(Icons.more_horiz, color: Color(0xFF8B4513)),
+            ],
+          ),
+        ),
+
+        // Products Grid
+        Expanded(
+          child: GridView.builder(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 2,
+              childAspectRatio: 0.8,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+            ),
+            itemCount: displayProducts.length,
+            itemBuilder: (context, index) {
+              final product = displayProducts[index];
+              return ModernProductCard(
+                product: product,
+                onTap: () => _showProductDetail(product),
+                onAddToCart: (orderItem) {
+                  if (product.stock <= 0) {
+                    _showErrorDialog('${product.name} is out of stock!');
+                    return;
+                  }
+
+                  setState(() {
+                    int existingIndex = cart.indexWhere((item) =>
+                    item.product.id == orderItem.product.id &&
+                        item.size == orderItem.size);
+
+                    if (existingIndex != -1) {
+                      cart[existingIndex].quantity += orderItem.quantity;
+                    } else {
+                      cart.add(orderItem);
+                    }
+                  });
+                },
+              );
+            },
+          ),
+        ),
+
+        // Cart Summary
+        if (cart.isNotEmpty)
+          Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.grey.withOpacity(0.3),
+                  spreadRadius: 1,
+                  blurRadius: 5,
+                  offset: Offset(0, -2),
+                ),
+              ],
+            ),
+            child: SafeArea(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '${cart.length} items in cart',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          '₱${cart.fold(0.0, (sum, item) => sum + item.totalPrice).toStringAsFixed(2)}',
+                          style: TextStyle(
+                            color: Color(0xFF8B4513),
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: _processOrder,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color(0xFF8B4513),
+                      foregroundColor: Colors.white,
+                      padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(25),
+                      ),
+                    ),
+                    child: Text('Order Now', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  void _showProductDetail(Product product) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => ProductDetailSheet(
+        product: product,
+        onAddToCart: (orderItem) {
+          if (product.stock <= 0) {
+            _showErrorDialog('${product.name} is out of stock!');
+            return;
+          }
+
+          setState(() {
+            int existingIndex = cart.indexWhere((item) =>
+            item.product.id == orderItem.product.id &&
+                item.size == orderItem.size);
+
+            if (existingIndex != -1) {
+              cart[existingIndex].quantity += orderItem.quantity;
+            } else {
+              cart.add(orderItem);
+            }
+          });
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
+}
+
+class ModernProductCard extends StatelessWidget {
+  final Product product;
+  final VoidCallback onTap;
+  final Function(OrderItem) onAddToCart;
+
+  ModernProductCard({
+    required this.product,
+    required this.onTap,
+    required this.onAddToCart,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.withOpacity(0.1),
+              spreadRadius: 1,
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Product Image with Heart Icon
+            Expanded(
+              flex: 3,
+              child: Stack(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                      image: DecorationImage(
+                        image: AssetImage('images/bgcafe.jfif'),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    child: product.stock <= 0
+                        ? Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                      ),
+                      child: Center(
+                        child: Text(
+                          'OUT OF STOCK',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    )
+                        : null,
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Container(
+                      padding: EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.3),
+                            spreadRadius: 1,
+                            blurRadius: 3,
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.favorite_border,
+                        color: Colors.grey[600],
+                        size: 16,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // Product Info
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      product.name,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.black87,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '₱${product.smallPrice.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        color: Color(0xFF8B4513),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Spacer(),
+                    Container(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: product.stock <= 0 ? null : () => _showSizeSelection(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Color(0xFF8B4513),
+                          foregroundColor: Colors.white,
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          elevation: 0,
+                        ),
+                        child: Text(
+                          'Add',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSizeSelection(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Select Size', style: TextStyle(color: Color(0xFF8B4513))),
+        backgroundColor: Colors.white,
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text('Small - ₱${product.smallPrice.toStringAsFixed(2)}',
+                  style: TextStyle(color: Color(0xFF8B4513))),
+              onTap: () {
+                Navigator.pop(context);
+                onAddToCart(OrderItem(
+                  product: product,
+                  size: 'Small',
+                  quantity: 1,
+                ));
+              },
+            ),
+            ListTile(
+              title: Text('Large - ₱${product.largePrice.toStringAsFixed(2)}',
+                  style: TextStyle(color: Color(0xFF8B4513))),
+              onTap: () {
+                Navigator.pop(context);
+                onAddToCart(OrderItem(
+                  product: product,
+                  size: 'Large',
+                  quantity: 1,
+                ));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ProductDetailSheet extends StatelessWidget {
+  final Product product;
+  final Function(OrderItem) onAddToCart;
+
+  ProductDetailSheet({required this.product, required this.onAddToCart});
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.7,
+      minChildSize: 0.5,
+      maxChildSize: 0.9,
+      builder: (context, scrollController) {
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: SingleChildScrollView(
+            controller: scrollController,
+            child: Padding(
+              padding: EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Handle bar
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 20),
+
+                  // Product Image
+                  Container(
+                    height: 200,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      image: DecorationImage(
+                        image: AssetImage('images/bgcafe.jfif'),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 20),
+
+                  // Product Name and Price
+                  Text(
+                    product.name,
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    '₱${product.smallPrice.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF8B4513),
+                    ),
+                  ),
+                  SizedBox(height: 16),
+
+                  // Description
+                  Text(
+                    'Description',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Delicious ${product.name.toLowerCase()} made with premium ingredients. Perfect for any time of the day. Available in small and large sizes to suit your preference.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                      height: 1.5,
+                    ),
+                  ),
+                  SizedBox(height: 20),
+
+                  // Stock Info
+                  Row(
+                    children: [
+                      Icon(Icons.inventory_2, color: Color(0xFF8B4513), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Stock: ${product.stock} items',
+                        style: TextStyle(
+                          color: product.stock <= 10 ? Colors.red : Colors.green,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 20),
+
+                  // Size Selection
+                  Text(
+                    'Select Size',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.black87,
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildSizeButton(
+                          context,
+                          'Small',
+                          '₱${product.smallPrice.toStringAsFixed(2)}',
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: _buildSizeButton(
+                          context,
+                          'Large',
+                          '₱${product.largePrice.toStringAsFixed(2)}',
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 30),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSizeButton(BuildContext context, String size, String price) {
+    return ElevatedButton(
+      onPressed: product.stock <= 0 ? null : () {
+        onAddToCart(OrderItem(
+          product: product,
+          size: size,
+          quantity: 1,
+        ));
+      },
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Color(0xFF8B4513),
+        foregroundColor: Colors.white,
+        padding: EdgeInsets.symmetric(vertical: 12),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(25),
+        ),
+      ),
+      child: Column(
+        children: [
+          Text(
+            size,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
+            ),
+          ),
+          Text(
+            price,
+            style: TextStyle(
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Keep the existing InventoryScreen and SalesReportScreen classes unchanged
+class InventoryScreen extends StatefulWidget {
+  @override
+  _InventoryScreenState createState() => _InventoryScreenState();
+}
+
+class _InventoryScreenState extends State<InventoryScreen> {
+  List<Product> products = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadProducts();
+  }
+
+  Future<void> loadProducts() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_products.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            products = (data['products'] as List)
+                .map((item) => Product.fromJson(item))
+                .toList();
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> updateStock(int productId, int newStock) async {
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost/cpecafe/update_stock.php'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'product_id': productId,
+          'stock': newStock,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          loadProducts();
+        }
+      }
+    } catch (e) {
+      print('Error updating stock: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.all(8),
+      itemCount: products.length,
+      itemBuilder: (context, index) {
+        final product = products[index];
+        return Card(
+          margin: EdgeInsets.symmetric(vertical: 4),
+          child: ListTile(
+            leading: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                image: DecorationImage(
+                  image: AssetImage('images/bgcafe.jfif'),
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ),
+            title: Text(product.name, style: TextStyle(color: Color(0xFF8B4513))),
+            subtitle: Text('${product.category} • Stock: ${product.stock}',
+                style: TextStyle(color: Color(0xFF8B4513).withOpacity(0.7))),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: product.stock <= 10 ? Colors.red :
+                    product.stock <= 20 ? Colors.orange : Colors.green,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    product.stock <= 10 ? 'LOW' :
+                    product.stock <= 20 ? 'MEDIUM' : 'GOOD',
+                    style: TextStyle(color: Colors.white, fontSize: 12),
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(Icons.edit, color: Color(0xFF8B4513)),
+                  onPressed: () => _showStockUpdateDialog(product),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showStockUpdateDialog(Product product) {
+    TextEditingController controller = TextEditingController(
+      text: product.stock.toString(),
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Update Stock: ${product.name}',
+            style: TextStyle(color: Color(0xFF8B4513))),
+        backgroundColor: Colors.white,
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: 'Stock Quantity',
+            labelStyle: TextStyle(color: Color(0xFF8B4513)),
+            border: OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF8B4513)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Color(0xFF8B4513)),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              int? newStock = int.tryParse(controller.text);
+              if (newStock != null) {
+                updateStock(product.id, newStock);
+                Navigator.pop(context);
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Color(0xFF8B4513),
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Update'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SalesReportScreen extends StatefulWidget {
+  @override
+  _SalesReportScreenState createState() => _SalesReportScreenState();
+}
+
+class _SalesReportScreenState extends State<SalesReportScreen> {
+  Map<String, dynamic> salesData = {};
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    loadSalesReport();
+  }
+
+  Future<void> loadSalesReport() async {
+    try {
+      final response = await http.get(
+        Uri.parse('http://localhost/cpecafe/get_sales_report.php'),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success']) {
+          setState(() {
+            salesData = data;
+            isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (isLoading) {
+      return Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF8B4513)),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Summary Cards
+          Row(
+            children: [
+              Expanded(
+                child: _buildSummaryCard(
+                  'Total Sales',
+                  '₱${salesData['total_sales']?.toStringAsFixed(2) ?? '0.00'}',
+                  Icons.attach_money,
+                  Color(0xFF8B4513),
+                ),
+              ),
+              SizedBox(width: 16),
+              Expanded(
+                child: _buildSummaryCard(
+                  'Total Orders',
+                  '${salesData['total_orders'] ?? 0}',
+                  Icons.shopping_cart,
+                  Color(0xFF8B4513),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
+          // Recent Orders
+          Text(
+            'Recent Orders',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF8B4513),
+            ),
+          ),
+          SizedBox(height: 8),
+          if (salesData['recent_orders'] != null)
+            ...((salesData['recent_orders'] as List).map((order) => Card(
+              elevation: 2,
+              margin: EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                title: Text('Order #${order['id']}',
+                    style: TextStyle(color: Color(0xFF8B4513))),
+                subtitle: Text('${order['created_at']}',
+                    style: TextStyle(color: Color(0xFF8B4513).withOpacity(0.7))),
+                trailing: Text('₱${double.parse(order['total']).toStringAsFixed(2)}',
+                    style: TextStyle(
+                      color: Color(0xFF8B4513),
+                      fontWeight: FontWeight.bold,
+                    )),
+              ),
+            )).toList()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryCard(String title, String value, IconData icon, Color color) {
+    return Card(
+      elevation: 4,
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, color: color),
+                SizedBox(width: 8),
+                Text(title, style: TextStyle(fontSize: 14, color: Colors.grey[600])),
+              ],
+            ),
+            SizedBox(height: 8),
+            Text(
+              value,
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+P2H04GBci2
